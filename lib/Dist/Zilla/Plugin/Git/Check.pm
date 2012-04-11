@@ -12,6 +12,22 @@ with 'Dist::Zilla::Role::BeforeRelease';
 with 'Dist::Zilla::Role::Git::DirtyFiles';
 with 'Dist::Zilla::Role::Git::Repo';
 
+has nonfatal => (
+    traits  => ['Array'],
+    isa     => 'ArrayRef[Str]',
+    lazy    => 1,
+    default => sub { [] },
+    handles => {
+        nonfatal => 'elements',
+    },
+);
+
+around mvp_multivalue_args => sub {
+    my $orig = shift;
+    my $self = shift;
+    ($self->$orig(@_), 'nonfatal');
+};
+
 
 # -- public methods
 
@@ -21,40 +37,53 @@ sub before_release {
     my $git = Git::Wrapper->new( $self->repo_root );
     my @output;
 
+    my %nonfatal = map { $_ => 1 } $self->nonfatal;
+
     # fetch current branch
     my ($branch) =
         map { /^\*\s+(.+)/ ? $1 : () }
         $git->branch;
 
+    my $logged;
     # check if some changes are staged for commit
     @output = $git->diff( { cached=>1, 'name-status'=>1 } );
     if ( @output ) {
+        $logged = 1;
         my $errmsg =
             "branch $branch has some changes staged for commit:\n" .
             join "\n", map { "\t$_" } @output;
-        $self->log_fatal($errmsg);
+        $nonfatal{staged}
+            ? $self->log($errmsg)
+            : $self->log_fatal($errmsg);
     }
 
     # everything but files listed in allow_dirty should be in a
     # clean state
     @output = $self->list_dirty_files($git);
     if ( @output ) {
+        $logged = 1;
         my $errmsg =
             "branch $branch has some uncommitted files:\n" .
             join "\n", map { "\t$_" } @output;
-        $self->log_fatal($errmsg);
+        $nonfatal{uncommitted}
+            ? $self->log($errmsg)
+            : $self->log_fatal($errmsg);
     }
 
     # no files should be untracked
     @output = $git->ls_files( { others=>1, 'exclude-standard'=>1 } );
     if ( @output ) {
+        $logged = 1;
         my $errmsg =
             "branch $branch has some untracked files:\n" .
             join "\n", map { "\t$_" } @output;
-        $self->log_fatal($errmsg);
+        $nonfatal{untracked}
+            ? $self->log($errmsg)
+            : $self->log_fatal($errmsg);
     }
 
-    $self->log( "branch $branch is in a clean state" );
+    $self->log( "branch $branch is in a clean state" )
+        unless $logged;
 }
 
 
